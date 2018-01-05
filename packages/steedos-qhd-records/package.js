@@ -52,13 +52,12 @@ Package.onUse(function (api) {
 	api.use('steedos:accounts@0.0.23');
 	api.use('steedos:theme@0.0.29');
 
-	api.addFiles('server/lib/steedos_request.coffee', 'server');
+	//这个文件放到apps里面要删除 
+	api.addFiles('lib/models/instance.coffee', 'server');
 
 	api.addFiles('server/lib/instances_to_archive.coffee', 'server');
 
 	api.addFiles('server/lib/records_qhd.coffee', 'server');
-
-	api.addFiles('server/methods/sync_archive.coffee', 'server');
 
 	// api.export('db');
 

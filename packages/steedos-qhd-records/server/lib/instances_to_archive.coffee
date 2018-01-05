@@ -1,5 +1,6 @@
 request = Npm.require('request')
-path = Npm.require('path');
+path = Npm.require('path')
+fs = Npm.require('fs')
 
 logger = new Logger 'Records_QHD -> InstancesToArchive'
 
@@ -7,52 +8,13 @@ pathname = path.join(__meteor_bootstrap__.serverDir, '../../../cfs/files/instanc
 
 absolutePath = path.resolve(pathname);
 
-#logger = console
-#
-#logger.debug = console.log
-
 # spaces: Array 工作区ID
-# archive_server: String 档案系统服务
 # contract_flows： Array 合同类流程
-InstancesToArchive = (spaces, archive_server, contract_flows, ins_ids) ->
+InstancesToArchive = (spaces, contract_flows, ins_ids) ->
 	@spaces = spaces
-	@archive_server = archive_server
 	@contract_flows = contract_flows
 	@ins_ids = ins_ids
 	return
-
-#	获取合同类的申请单：正常结束的(不包括取消申请、被驳回的申请单)
-InstancesToArchive::getContractInstances = ()->
-	query = {
-		space: {$in: @spaces},
-		flow: {$in: @contract_flows},
-		is_archived: false,
-		is_deleted: false,
-		state: "completed",
-		"values.record_need": "true",
-		$or: [{final_decision: "approved"}, {final_decision: {$exists: false}}, {final_decision: ""}]
-	}
-
-	if @ins_ids
-		query._id = {$in: @ins_ids}
-
-	return db.instances.find(query, {fields: {_id: 1}}).fetch()
-
-InstancesToArchive::getNonContractInstances = ()->
-	query = {
-		space: {$in: @spaces},
-		flow: {$nin: @contract_flows},
-		is_archived: false,
-		is_deleted: false,
-		state: "completed",
-		"values.record_need": "true",
-		$or: [{final_decision: "approved"}, {final_decision: {$exists: false}}, {final_decision: ""}]
-	}
-
-	if @ins_ids
-		query._id = {$in: @ins_ids}
-
-	return db.instances.find(query, {fields: {_id: 1}}).fetch()
 
 InstancesToArchive.success = (instance)->
 	console.log("success, name is #{instance.name}, id is #{instance._id}")
@@ -61,6 +23,24 @@ InstancesToArchive.success = (instance)->
 InstancesToArchive.failed = (instance, error)->
 	console.log("failed, name is #{instance.name}, id is #{instance._id}. error: ")
 	console.log error
+
+#	获取非合同类的申请单：正常结束的(不包括取消申请、被驳回的申请单)
+InstancesToArchive::getNonContractInstances = ()->
+	query = {
+		space: {$in: @spaces},
+		flow: {$nin: @contract_flows},
+		is_recorded: false,
+		# is_archived:false,
+		is_deleted: false,
+		state: "completed",
+		"values.record_need": "true",
+		$or: [{final_decision: "approved"}, {final_decision: {$exists: false}}, {final_decision: ""}]
+	}
+
+	if @ins_ids
+		query._id = {$in: @ins_ids}
+
+	return db.instances.find(query, {fields: {_id: 1}}).fetch()
 
 #	校验必填
 _checkParameter = (formData) ->
@@ -92,10 +72,9 @@ _minxiAttachmentInfo = (formData, instance, attach) ->
 		is_private: attach.metadata.is_private || false
 	}
 
+# 整理档案表数据
 _minxiInstanceData = (formData, instance) ->
 	console.log("_minxiInstanceData", instance._id)
-
-	fs = Npm.require('fs');
 
 	if !formData || !instance
 		return
@@ -298,70 +277,10 @@ _minxiInstanceData = (formData, instance) ->
 
 	console.log("_minxiInstanceData end", instance._id)
 
-	return formData;
+	return formData
 
-
-InstancesToArchive._sendContractInstance = (url, instance, callback) ->
-
-#	表单数据
-	formData = {}
-
-	_minxiInstanceData(formData, instance)
-
-	if _checkParameter(formData)
-
-		logger.debug("_sendContractInstance: #{instance._id}")
-
-		#	发送数据
-		httpResponse = steedosRequest.postFormDataAsync url, formData, callback
-
-		if httpResponse?.statusCode == 200
-			InstancesToArchive.success instance
-		else
-			InstancesToArchive.failed instance, httpResponse?.body
-
-		httpResponse = null
-	else
-		InstancesToArchive.failed instance, "立档单位 不能为空"
-
-
-InstancesToArchive::sendContractInstances = (to_archive_api) ->
-	console.time("sendContractInstances")
-	instances = @getContractInstances()
-
-	that = @
-	console.log "instances.length is #{instances.length}"
-	instances.forEach (mini_ins, i)->
-		instance = db.instances.findOne({_id: mini_ins._id})
-
-		if instance
-			url = that.archive_server + to_archive_api + '?externalId=' + instance._id
-
-			console.log("InstancesToArchive.sendContractInstances url", url)
-
-			InstancesToArchive._sendContractInstance url, instance
-
-	console.timeEnd("sendContractInstances")
-
-
-InstancesToArchive::sendNonContractInstances = (to_archive_api) ->
-	console.time("sendNonContractInstances")
-	instances = @getNonContractInstances()
-	that = @
-	console.log "instances.length is #{instances.length}"
-	instances.forEach (mini_ins)->
-		instance = db.instances.findOne({_id: mini_ins._id})
-		if instance
-			url = that.archive_server + to_archive_api + '?externalId=' + instance._id
-			console.log("InstancesToArchive.sendNonContractInstances url", url)
-			InstancesToArchive.sendNonContractInstance url, instance
-
-	console.timeEnd("sendNonContractInstances")
-
-
-InstancesToArchive.sendNonContractInstance = (url, instance, callback) ->
+InstancesToArchive.syncNonContractInstance = (instance, callback) ->
 	format = "YYYY-MM-DD HH:mm:ss"
-
 	#	表单数据
 	formData = {}
 
@@ -384,14 +303,20 @@ InstancesToArchive.sendNonContractInstance = (url, instance, callback) ->
 
 		logger.debug("_sendContractInstance: #{instance._id}")
 
-		#	发送数据
-		httpResponse = steedosRequest.postFormDataAsync url, formData, callback
+		# 添加到相应的档案表
 
-		if httpResponse?.statusCode == 200
-			InstancesToArchive.success instance
-		else
-			InstancesToArchive.failed instance, httpResponse
-
-		httpResponse = null
 	else
 		InstancesToArchive.failed instance, "立档单位 不能为空"
+
+InstancesToArchive::syncNonContractInstances = () ->
+	console.log "==========="
+	console.time("syncNonContractInstances")
+	instances = @getNonContractInstances()
+	that = @
+	console.log "instances.length is #{instances.length}"
+	instances.forEach (mini_ins)->
+		instance = db.instances.findOne({_id: mini_ins._id})
+		if instance
+			console.log instance._id
+			# InstancesToArchive.syncNonContractInstance instance
+	console.timeEnd("syncNonContractInstances")

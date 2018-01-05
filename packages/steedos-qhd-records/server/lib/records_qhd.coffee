@@ -14,7 +14,7 @@ RecordsQHD = {}
 
 logger = new Logger 'Records_QHD'
 
-RecordsQHD.settings_records_qhd = Meteor.settings.records_qhd
+RecordsQHD.settings_records_qhd = Meteor.settings?.records_qhd
 
 RecordsQHD.test = () ->
 	logger.debug "[#{new Date()}]run RecordsQHD.test"
@@ -31,41 +31,17 @@ RecordsQHD.instanceToArchive = (ins_ids)->
 
 	spaces = RecordsQHD.settings_records_qhd.spaces
 
-	to_archive_sett = RecordsQHD.settings_records_qhd.to_archive
-
-	archive_server = to_archive_sett.archive_server
+	to_archive_sett = RecordsQHD?.settings_records_qhd?.to_archive
 
 	flows = to_archive_sett?.contract_instances?.flows
-
-	to_archive_api = to_archive_sett?.non_contract_instances?.to_archive_api
-
-	contract_archive_api = to_archive_sett?.contract_instances?.to_archive_api
 
 	if !spaces
 		logger.error "缺少settings配置: records-qhd.spaces"
 		return
 
-	if !archive_server
-		logger.error "缺少settings配置: records-qhd.to_archive_sett.archive_server"
-		return
+	instancesToArchive = new InstancesToArchive(spaces,flows,ins_ids)
 
-	if !flows
-		logger.error "缺少settings配置: records-qhd.to_archive_sett.contract_instances.flows"
-		return
-
-	if !contract_archive_api
-		logger.error "缺少settings配置: records-qhd.to_archive_sett.contract_instances.contract_archive_api"
-		return
-
-	if !to_archive_api
-		logger.error "缺少settings配置: records-qhd.to_archive_sett.non_contract_instances.to_archive_api"
-		return
-
-	instancesToArchive = new InstancesToArchive(spaces, archive_server, flows, ins_ids)
-
-	instancesToArchive.sendContractInstances(contract_archive_api);
-
-	instancesToArchive.sendNonContractInstances(to_archive_api)
+	instancesToArchive.syncNonContractInstances()
 
 RecordsQHD.startScheduleJob = (name, recurrenceRule, fun) ->
 
