@@ -16,23 +16,22 @@ logger = new Logger 'Records_QHD'
 
 RecordsQHD.settings_records_qhd = Meteor.settings?.records_qhd
 
-RecordsQHD.test = () ->
-	logger.debug "[#{new Date()}]run RecordsQHD.test"
-
 RecordsQHD.scheduleJobMaps = {}
 
 RecordsQHD.run = ()->
 	try
-		RecordsQHD.instanceToArchive();
+		RecordsQHD.instanceToArchive()
 	catch  e
 		console.error "RecordsQHD.instanceToArchive", e
 
+# RecordsQHD.instanceToArchive()
 RecordsQHD.instanceToArchive = (ins_ids)->
 
 	spaces = RecordsQHD.settings_records_qhd.spaces
 
 	to_archive_sett = RecordsQHD?.settings_records_qhd?.to_archive
 
+	# 获取所有的合同类申请流程
 	flows = to_archive_sett?.contract_instances?.flows
 
 	if !spaces

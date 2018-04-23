@@ -18,7 +18,7 @@ InstancesToArchive = (spaces, contract_flows, ins_ids) ->
 
 InstancesToArchive.success = (instance)->
 	console.log("success, name is #{instance.name}, id is #{instance._id}")
-	db.instances.direct.update({_id: instance._id}, {$set: {is_archived: true}})
+	db.instances.direct.update({_id: instance._id}, {$set: {is_recorded: true}})
 
 InstancesToArchive.failed = (instance, error)->
 	console.log("failed, name is #{instance.name}, id is #{instance._id}. error: ")
@@ -29,71 +29,79 @@ InstancesToArchive::getNonContractInstances = ()->
 	query = {
 		space: {$in: @spaces},
 		flow: {$nin: @contract_flows},
-		is_recorded: false,
-		# is_archived:false,
+		# is_archived字段被老归档接口占用，所以使用 is_recorded 字段判断是否归档
+		$or: [
+			{is_recorded: false},
+			{is_recorded: {$exists: false}}
+		],
 		is_deleted: false,
 		state: "completed",
 		"values.record_need": "true",
-		$or: [{final_decision: "approved"}, {final_decision: {$exists: false}}, {final_decision: ""}]
+		$or: [
+			{final_decision: "approved"},
+			{final_decision: {$exists: false}},
+			{final_decision: ""}
+		]
 	}
-
 	if @ins_ids
 		query._id = {$in: @ins_ids}
-
 	return db.instances.find(query, {fields: {_id: 1}}).fetch()
 
-#	校验必填
-_checkParameter = (formData) ->
-	if !formData.FONDSID
-		return false
-	return true
 
-getFileHistoryName = (fileName, historyName, stuff) ->
-	regExp = /\.[^\.]+/
 
-	fName = fileName.replace(regExp, "")
+# 按年度计算件数,生成电子文件号的最后组成
+buildElectronicRecordCode = (formData) ->
+	num = db.archive_wenshu.find({'year':formData?.year}).count() + 1
+	strCount = (Array(6).join('0') + num).slice(-6)
+	strElectronicRecordCode = formData?.fonds_identifier +
+								formData?.archival_category_code +
+								formData?.year + strCount
+	return strElectronicRecordCode
 
-	extensionHistory = regExp.exec(historyName)
-
-	if(extensionHistory)
-		fName = fName + "_" + stuff + extensionHistory
-	else
-		fName = fName + "_" + stuff
-
-	return fName
-
-_minxiAttachmentInfo = (formData, instance, attach) ->
-	user = db.users.findOne({_id: attach.metadata.owner})
-	formData.attachInfo.push {
-		instance: instance._id,
-		attach_name: encodeURI(attach.name()),
-		owner: attach.metadata.owner,
-		owner_username: encodeURI(user.username || user.steedos_id),
-		is_private: attach.metadata.is_private || false
-	}
 
 # 整理档案表数据
 _minxiInstanceData = (formData, instance) ->
-	console.log("_minxiInstanceData", instance._id)
-
-	if !formData || !instance
+	if !instance
 		return
+	dateFormat = "YYYY-MM-DD HH:mm:ss"
 
-	format = "YYYY-MM-DD HH:mm:ss"
+	formData.space = instance.space
 
-	formData.fileID = instance._id
-
-	field_values = InstanceManager.handlerInstanceByFieldMap(instance);
-
+	# 字段映射
+	field_values = InstanceManager.handlerInstanceByFieldMap(instance)
 	formData = _.extend formData, field_values
+
+	# 根据FONDSID查找全宗号
+	fond = db.archive_fonds.findOne({'name':formData?.fonds_name})
+	formData.fonds_identifier = fond?._id
+	# 根据机构查找对应的类别号
+	classification = db.archive_classification.findOne({'dept':/{formData?.organizational_structure}/})
+	formData.category_code = classification?._id
+	# 保管期限代码查找
+	retention = db.archive_retention.findOne({'code':formData?.archive_retention_code})
+	formData.retention_peroid = retention?._id
+	# 根据保管期限,处理标志
+	if retention?.years >= 10
+		formData.produce_flag = "在档"
+	else
+		formData.produce_flag = "暂存"
+
+	# 电子文件号，不生成，点击接收的时候才生成
+	# formData.electronic_record_code = buildElectronicRecordCode formData
+	# 归档日期
+	formData.archive_date = moment(new Date()).format(dateFormat)
+
+	# OA表单的ID，作为判断OA归档的标志
+	formData.external_id = instance._id
+
+	formData.is_receive = false
 
 	fieldNames = _.keys(formData)
 
 	fieldNames.forEach (key)->
 		fieldValue = formData[key]
-
 		if _.isDate(fieldValue)
-			fieldValue = moment(fieldValue).format(format)
+			fieldValue = moment(fieldValue).format(dateFormat)
 
 		if _.isObject(fieldValue)
 			fieldValue = fieldValue?.name
@@ -107,209 +115,76 @@ _minxiInstanceData = (formData, instance) ->
 		if !fieldValue
 			fieldValue = ''
 
-		formData[key] = encodeURI(fieldValue)
 
+
+	# ===============正文附件=======================
 	formData.attach = new Array()
+	formData.attachInfo = new Array()
 
-	formData.attachInfo = new Array();
 
-	#	提交人信息
-	user_info = db.users.findOne({_id: instance.applicant})
+	# 整理附件数据
+	# _minxiAttachmentInfo = (formData, instance, attach) ->
+	# 	user = db.users.findOne({_id: attach.metadata.owner})
+	# 	formData.attachInfo.push {
+	# 		instance: instance._id,
+	# 		attach_name: encodeURI(attach.name()),
+	# 		owner: attach.metadata.owner,
+	# 		owner_username: encodeURI(user.username || user.steedos_id),
+	# 		is_private: attach.metadata.is_private || false
+	# 	}
 
 	mainFilesHandle = (f)->
+		console.log "============正文附件流=============="
+		console.log f.createReadStream('instances')
 		try
-			filepath = path.join(absolutePath, f.copies.instances.key);
-
-			if fs.existsSync(filepath)
+			fileStream = f.createReadStream('instances')
+			if fileStream
 				formData.attach.push {
-					value: fs.createReadStream(filepath),
-					options: {filename: f.name()}
+					value: fileStream
 				}
-
-				_minxiAttachmentInfo formData, instance, f
+				# _minxiAttachmentInfo formData, instance, f
 			else
-				logger.error "附件不存在：#{filepath}"
-
+				logger.error "附件不存在：#{f._id}"
 		catch e
-			logger.error "正文附件下载失败：#{f._id},#{f.name()}. error: " + e
-		#		正文附件历史版本
-		mainFileHistory = cfs.instances.find({
-			'metadata.instance': f.metadata.instance,
-			'metadata.current': {$ne: true},
-			"metadata.main": true,
-			"metadata.parent": f.metadata.parent
-		}, {sort: {uploadedAt: -1}}).fetch()
+			logger.error "正文附件下载失败：#{f._id}. error: " + e
 
-		mainFileHistoryLength = mainFileHistory.length
-
-		mainFileHistory.forEach (fh, i) ->
-			fName = getFileHistoryName f.name(), fh.name(), mainFileHistoryLength - i
-			try
-				filepath = path.join(absolutePath, f.copies.instances.key);
-				if fs.existsSync(filepath)
-					formData.attach.push {
-						value: fs.createReadStream(filepath),
-						options: {filename: fName}
-					}
-					_minxiAttachmentInfo formData, instance, f
-				else
-					logger.error "附件不存在：#{filepath}"
-			catch e
-				logger.error "正文附件下载失败：#{f._id},#{f.name()}. error: " + e
-
-
-	nonMainFileHandle = (f)->
-		try
-			filepath = path.join(absolutePath, f.copies.instances.key);
-			if fs.existsSync(filepath)
-				formData.attach.push {
-					value: fs.createReadStream(filepath),
-					options: {filename: f.name()}
-				}
-				_minxiAttachmentInfo formData, instance, f
-			else
-				logger.error "附件不存在：#{filepath}"
-		catch e
-			logger.error "附件下载失败：#{f._id},#{f.name()}. error: " + e
-		#	非正文附件历史版本
-		nonMainFileHistory = cfs.instances.find({
-			'metadata.instance': f.metadata.instance,
-			'metadata.current': {$ne: true},
-			"metadata.main": {$ne: true},
-			"metadata.parent": f.metadata.parent
-		}, {sort: {uploadedAt: -1}}).fetch()
-
-		nonMainFileHistoryLength = nonMainFileHistory.length
-
-		nonMainFileHistory.forEach (fh, i) ->
-			fName = getFileHistoryName f.name(), fh.name(), nonMainFileHistoryLength - i
-			try
-				filepath = path.join(absolutePath, f.copies.instances.key);
-				if fs.existsSync(filepath)
-					formData.attach.push {
-						value: fs.createReadStream(filepath),
-						options: {filename: fName}
-					}
-					_minxiAttachmentInfo formData, instance, f
-				else
-					logger.error "附件不存在：#{filepath}"
-			catch e
-				logger.error "附件下载失败：#{f._id},#{f.name()}. error: " + e
-
-	#	正文附件
 	mainFile = cfs.instances.find({
 		'metadata.instance': instance._id,
 		'metadata.current': true,
 		"metadata.main": true
 	}).fetch()
 
-	mainFile.forEach mainFilesHandle
-
-	console.log("正文附件读取完成")
-
-	#	非正文附件
-	nonMainFile = cfs.instances.find({
-		'metadata.instance': instance._id,
-		'metadata.current': true,
-		"metadata.main": {$ne: true}
-	}).fetch()
-
-	nonMainFile.forEach nonMainFileHandle
-
-	console.log("非正文附件读取完成")
-
-	#分发
-	if instance.distribute_from_instance
-#	正文附件
-		mainFile = cfs.instances.find({
-			'metadata.instance': instance.distribute_from_instance,
-			'metadata.current': true,
-			"metadata.main": true,
-			"metadata.is_private": {
-				$ne: true
-			}
-		}).fetch()
-
-		mainFile.forEach mainFilesHandle
-
-		console.log("分发-正文附件读取完成")
-
-		#	非正文附件
-		nonMainFile = cfs.instances.find({
-			'metadata.instance': instance.distribute_from_instance,
-			'metadata.current': true,
-			"metadata.main": {$ne: true},
-			"metadata.is_private": {
-				$ne: true
-			}
-		})
-
-		nonMainFile.forEach nonMainFileHandle
-
-		console.log("分发-非正文附件读取完成")
-
-	#	原文
-	form = db.forms.findOne({_id: instance.form})
-
-	attachInfoName = "F_#{form?.name}_#{instance._id}_1.html";
-
-	space = db.spaces.findOne({_id: instance.space});
-
-	user = db.users.findOne({_id: space.owner})
-
-	options = {showTrace: true, showAttachments: true, absolute: true}
-
-	html = InstanceReadOnlyTemplate.getInstanceHtml(user, space, instance, options)
-
-	dataBuf = new Buffer(html);
-
-	try
-		formData.attach.push {
-			value: dataBuf,
-			options: {filename: attachInfoName}
-		}
-
-		console.log("原文读取完成")
-	catch e
-		logger.error "原文读取失败#{instance._id}. error: " + e
-
-	formData.attachInfo = JSON.stringify(formData.attachInfo)
+	# mainFile.forEach mainFilesHandle
 
 	console.log("_minxiInstanceData end", instance._id)
 
 	return formData
 
 InstancesToArchive.syncNonContractInstance = (instance, callback) ->
-	format = "YYYY-MM-DD HH:mm:ss"
 	#	表单数据
 	formData = {}
 
-	#	设置归档日期
-	now = new Date()
-
-	formData.guidangriqi = moment(now).format(format)
-
-	formData.LAST_FILE_DATE = moment(instance.modified).format(format)
-
-	formData.FILE_DATE = moment(instance.submit_date).format(format)
-
-	formData.TITLE_PROPER = instance.name || "无"
-
 	_minxiInstanceData(formData, instance)
 
+	#	校验必填
+	_checkParameter = (formData) ->
+		if !formData.fonds_name
+			return false
+		return true
+
 	if _checkParameter(formData)
-
-#		console.log "formData", formData
-
 		logger.debug("_sendContractInstance: #{instance._id}")
-
 		# 添加到相应的档案表
-
+		db.archive_wenshu.direct.insert(formData)
+		# InstancesToArchive.success instance
 	else
 		InstancesToArchive.failed instance, "立档单位 不能为空"
 
 InstancesToArchive::syncNonContractInstances = () ->
-	console.log "==========="
+	# instance = db.instances.findOne({_id: 'hEKkSrLCoQ4Q2Y5z4'})
+	# if instance
+	# 	InstancesToArchive.syncNonContractInstance instance
+
 	console.time("syncNonContractInstances")
 	instances = @getNonContractInstances()
 	that = @
@@ -317,6 +192,6 @@ InstancesToArchive::syncNonContractInstances = () ->
 	instances.forEach (mini_ins)->
 		instance = db.instances.findOne({_id: mini_ins._id})
 		if instance
-			console.log instance._id
-			# InstancesToArchive.syncNonContractInstance instance
+			console.log instance.name
+			InstancesToArchive.syncNonContractInstance instance
 	console.timeEnd("syncNonContractInstances")

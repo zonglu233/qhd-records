@@ -1,4 +1,4 @@
 
-db = {}
+@db = {}
 _.extend
 	db: db

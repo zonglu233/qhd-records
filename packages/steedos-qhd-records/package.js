@@ -9,11 +9,11 @@ Npm.depends({
 	'request'  : '2.81.0',
 	'node-schedule' : '1.2.1',
 	cookies: "0.6.1",
+	"eval": "0.1.2",
 });
 
 Package.onUse(function (api) {
 	api.versionsFrom('1.0');
-
 	api.use('reactive-var');
 	api.use('reactive-dict');
 	api.use('coffeescript');
@@ -48,11 +48,11 @@ Package.onUse(function (api) {
 
 	api.use('momentjs:moment', 'client');
 	api.use('mrt:moment-timezone', 'client');
-	api.use('steedos:base@0.0.70');
-	api.use('steedos:accounts@0.0.23');
-	api.use('steedos:theme@0.0.29');
+	api.use('steedos:admin');
+	api.use('steedos:workflow');
+	api.use('steedos:base');
 
-	//这个文件放到apps里面要删除 
+	
 	api.addFiles('lib/models/instance.coffee', 'server');
 
 	api.addFiles('server/lib/instances_to_archive.coffee', 'server');
