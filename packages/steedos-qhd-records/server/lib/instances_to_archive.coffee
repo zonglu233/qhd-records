@@ -4,10 +4,6 @@ fs = Npm.require('fs')
 
 logger = new Logger 'Records_QHD -> InstancesToArchive'
 
-pathname = path.join(__meteor_bootstrap__.serverDir, '../../../cfs/files/instances');
-
-absolutePath = path.resolve(pathname);
-
 # spaces: Array 工作区ID
 # contract_flows： Array 合同类流程
 InstancesToArchive = (spaces, contract_flows, ins_ids) ->
